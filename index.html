@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>場地座位抽選系統 - DJB Seat</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
+
+    body {
+      font-family: 'Noto Sans TC', sans-serif;
+      background-color: #f1f5f9;
+      color: #1e293b;
+    }
+
+    /* 頂部深藍弧形背景 */
+    .venue-header {
+      background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
+      position: relative;
+      overflow: hidden;
+      border-bottom-left-radius: 50% 24px;
+      border-bottom-right-radius: 50% 24px;
+    }
+
+    /* 座位基本樣式 */
+    .seat {
+      aspect-ratio: 1 / 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      border-radius: 6px;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      user-select: none;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 未抽過（1-196 與 197-200 外觀一致） */
+    .seat-available {
+      background-color: #dbeafe;
+      color: #1e3a8a;
+      border: 1px solid #bfdbfe;
+    }
+
+    /* 滾動動畫中的高亮 */
+    .seat-rolling {
+      background-color: #fef08a;
+      color: #854d0e;
+      border: 2px solid #eab308;
+      transform: scale(1.12);
+      z-index: 10;
+      box-shadow: 0 0 12px rgba(250, 204, 21, 0.8);
+    }
+
+    /* 本輪抽中（亮黃色） */
+    .seat-current {
+      background-color: #facc15;
+      color: #422006;
+      border: 2px solid #ca8a04;
+      transform: scale(1.12);
+      z-index: 20;
+      box-shadow: 0 0 18px rgba(250, 204, 21, 0.95);
+      animation: pulse-gold 1.8s infinite;
+    }
+
+    /* 過去已抽過（深藍色） */
+    .seat-drawn {
+      background-color: #2563eb;
+      color: #ffffff;
+      border: 1px solid #1d4ed8;
+    }
+
+    @keyframes pulse-gold {
+      0%, 100% {
+        box-shadow: 0 0 14px rgba(250, 204, 21, 0.85);
+      }
+      50% {
+        box-shadow: 0 0 24px rgba(234, 179, 8, 1);
+      }
+    }
+
+    /* 走道虛線 */
+    .aisle-line {
+      border-left: 2px dashed #eab308;
+      border-right: 2px dashed #eab308;
+    }
+
+    /* 12欄等寬網格 */
+    .seat-grid-12 {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 4px;
+    }
+
+    @media (min-width: 768px) {
+      .seat-grid-12 {
+        gap: 6px;
+      }
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col items-center pb-12">
+
+  <!-- 頂部場地標題區 -->
+  <header class="venue-header w-full text-white pt-6 pb-10 px-4 shadow-lg">
+    <div class="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+      <!-- 品牌 Logo 標示 -->
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-lg border-2 border-white flex items-center justify-center font-black text-xl tracking-tighter text-amber-400">
+          D
+        </div>
+        <div class="leading-tight text-xs font-bold tracking-wider text-amber-400 uppercase">
+          Desire<br/>Journey's<br/>Brilliant
+        </div>
+      </div>
+
+      <!-- 主標題 -->
+      <div class="text-center">
+        <h1 class="text-3xl md:text-4xl font-black tracking-widest">場地座位表</h1>
+        <div class="h-1.5 w-36 bg-amber-400 mx-auto mt-2 rounded-full"></div>
+      </div>
+
+      <!-- 連線狀態與房間切換 -->
+      <div class="flex items-center gap-2 bg-slate-900/60 backdrop-blur-sm px-3 py-1.5 rounded-full border border-white/15 text-xs">
+        <span id="conn-dot" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+        <span id="conn-text" class="font-medium text-slate-200">連線初始化中...</span>
+        <span class="text-slate-500">|</span>
+        <span id="room-badge" class="text-amber-300 font-bold">頻道: default</span>
+        <button id="btn-switch-room" class="ml-1 px-2 py-0.5 bg-white/10 hover:bg-white/20 rounded text-white transition">
+          切換
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主內容區 -->
+  <main class="w-full max-w-6xl px-3 md:px-6 -mt-5 z-10 flex flex-col items-center">
+
+    <!-- 舞台區塊 -->
+    <div class="w-full max-w-xl bg-amber-400 text-slate-900 font-black text-2xl md:text-3xl py-4 rounded-2xl shadow-md text-center tracking-[0.5em] pl-[0.5em] border-2 border-amber-500">
+      舞台
+    </div>
+
+    <!-- 圖例說明 -->
+    <div class="flex flex-wrap items-center justify-center gap-6 my-5 text-sm font-bold text-slate-700 bg-white px-6 py-2.5 rounded-full shadow-sm border border-slate-200">
+      <div class="flex items-center gap-2">
+        <span class="w-4 h-4 rounded bg-[#dbeafe] border border-[#bfdbfe] inline-block"></span>
+        <span>未抽出座位</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="w-4 h-4 rounded bg-[#facc15] border border-[#ca8a04] inline-block"></span>
+        <span>本輪抽中</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="w-4 h-4 rounded bg-[#2563eb] border border-[#1d4ed8] inline-block"></span>
+        <span>已抽過座位</span>
+      </div>
+    </div>
+
+    <!-- 場地座位圖容器 -->
+    <div class="w-full bg-white rounded-2xl shadow-lg border border-slate-200 p-3 md:p-6 overflow-x-auto">
+      <div class="min-w-[680px]">
+
+        <!-- VIP 席橫條 -->
+        <div class="grid grid-cols-[28px_1fr_56px_1fr_28px] items-center gap-2 mb-3">
+          <div></div>
+          <div class="bg-slate-200 text-slate-700 font-bold text-center py-2 rounded-lg tracking-widest">VIP 席</div>
+          <div></div>
+          <div class="bg-slate-200 text-slate-700 font-bold text-center py-2 rounded-lg tracking-widest">VIP 席</div>
+          <div></div>
+        </div>
+
+        <!-- 座位排 A - I -->
+        <div class="grid grid-cols-[28px_1fr_56px_1fr_28px] gap-2 items-stretch">
+          <!-- 左側排號 A-I -->
+          <div id="labels-left" class="flex flex-col justify-between gap-1.5 font-black text-blue-600 text-base md:text-lg text-center py-0.5"></div>
+
+          <!-- 左側座位區 -->
+          <div id="seats-left" class="flex flex-col justify-between gap-1.5"></div>
+
+          <!-- 中央走道 -->
+          <div class="aisle-line flex flex-col items-center justify-center text-slate-400 font-bold text-sm tracking-widest select-none">
+            <span>走</span>
+            <span class="mt-2">道</span>
+          </div>
+
+          <!-- 右側座位區 -->
+          <div id="seats-right" class="flex flex-col justify-between gap-1.5"></div>
+
+          <!-- 右側排號 A-I -->
+          <div id="labels-right" class="flex flex-col justify-between gap-1.5 font-black text-blue-600 text-base md:text-lg text-center py-0.5"></div>
+        </div>
+
+        <!-- KOL 席橫條 -->
+        <div class="grid grid-cols-[28px_1fr_56px_1fr_28px] items-center gap-2 mt-3">
+          <div></div>
+          <div class="bg-slate-200 text-slate-700 font-bold text-center py-2 rounded-lg tracking-widest">KOL 席</div>
+          <div></div>
+          <div class="bg-slate-200 text-slate-700 font-bold text-center py-2 rounded-lg tracking-widest">KOL 席</div>
+          <div></div>
+        </div>
+
+        <!-- 底部媒體席與控台 -->
+        <div class="grid grid-cols-[28px_1fr_28px] items-center gap-2 mt-6">
+          <div></div>
+          <div class="grid grid-cols-12 items-stretch rounded-lg overflow-hidden border border-slate-300">
+            <div class="col-span-4 bg-slate-200 text-slate-700 font-bold flex items-center justify-center py-3 tracking-widest">
+              媒體席
+            </div>
+            <div class="col-span-4 bg-slate-400 text-slate-900 font-black text-lg flex items-center justify-center py-4 tracking-widest">
+              控台
+            </div>
+            <div class="col-span-4 bg-slate-200 text-slate-700 font-bold flex items-center justify-center py-3 tracking-widest">
+              媒體席
+            </div>
+          </div>
+          <div></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 抽選控制台 -->
+    <div class="w-full max-w-2xl mt-8 bg-white rounded-2xl shadow-md border border-slate-200 p-6 flex flex-col items-center">
+      <div class="text-sm font-bold text-slate-500 mb-1">本輪抽中座位號碼</div>
+      <div id="winner-display" class="text-5xl md:text-6xl font-black text-slate-800 tracking-wider my-2 h-16 flex items-center justify-center">
+        ---
+      </div>
+      <div id="winner-seat-info" class="text-sm font-bold text-blue-600 mb-5 h-5">
+        準備就緒，點擊下方按鈕開始抽選
+      </div>
+
+      <!-- 抽選按鈕 -->
+      <button id="btn-draw" class="w-full max-w-sm py-4 px-8 bg-gradient-to-r from-amber-400 to-yellow-500 hover:from-amber-500 hover:to-yellow-600 active:scale-95 text-slate-950 font-black text-xl rounded-xl shadow-lg transition transform cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+        開始抽選
+      </button>
+
+      <!-- 已抽中歷史紀錄清單 -->
+      <div class="w-full mt-6 pt-5 border-t border-slate-100">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-bold text-slate-500 uppercase tracking-wider">已抽出順序紀錄</span>
+          <span id="drawn-count-badge" class="text-xs font-bold text-slate-400">已抽出 0 席</span>
+        </div>
+        <div id="history-list" class="flex flex-wrap gap-1.5 min-h-[32px] p-2.5 bg-slate-50 rounded-xl border border-slate-200/80 text-xs">
+          <span class="text-slate-400">尚無抽選紀錄</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 最下方重置按鈕區 -->
+    <div class="w-full flex justify-center mt-10">
+      <button id="btn-open-reset" class="px-5 py-2.5 bg-white hover:bg-red-50 text-red-600 border border-red-200 hover:border-red-300 font-bold text-sm rounded-xl shadow-sm transition cursor-pointer">
+        重置所有抽選紀錄
+      </button>
+    </div>
+
+  </main>
+
+  <!-- 自訂重置確認彈窗 -->
+  <div id="reset-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs hidden items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200">
+      <h3 class="text-lg font-black text-slate-900">確定要重置抽選紀錄嗎？</h3>
+      <p class="text-sm text-slate-600 mt-2 leading-relaxed">
+        此動作將會清除目前頻道的所有已抽中紀錄，所有連線裝置的座位表都會同步恢復為未抽選狀態，且無法復原。
+      </p>
+      <div class="flex justify-end gap-2.5 mt-6">
+        <button id="btn-cancel-reset" class="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm transition cursor-pointer">
+          取消
+        </button>
+        <button id="btn-confirm-reset" class="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold text-sm shadow transition cursor-pointer">
+          確認重置
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 自訂切換頻道彈窗 -->
+  <div id="room-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs hidden items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200">
+      <h3 class="text-lg font-black text-slate-900">切換同步頻道（房間代碼）</h3>
+      <p class="text-sm text-slate-600 mt-1.5">
+        輸入相同的頻道代碼，即可讓多台裝置即時共享同一份座位抽選紀錄。
+      </p>
+      <input id="input-room-id" type="text" placeholder="例如: default 或 event2026" class="w-full mt-4 px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-bold focus:outline-none focus:border-blue-500" />
+      <div class="flex justify-end gap-2.5 mt-5">
+        <button id="btn-cancel-room" class="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm transition cursor-pointer">
+          取消
+        </button>
+        <button id="btn-confirm-room" class="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm shadow transition cursor-pointer">
+          進入頻道
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Firebase 即時同步邏輯 -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import {
+      getFirestore,
+      doc,
+      onSnapshot,
+      setDoc,
+      runTransaction
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    // 你的 DJB seat Firebase 設定
+    const firebaseConfig = {
+      apiKey: "AIzaSyAqRkwizRkqmxA5fyg5YS97qXxpvG6TF64",
+      authDomain: "djb-seat.firebaseapp.com",
+      projectId: "djb-seat",
+      storageBucket: "djb-seat.firebasestorage.app",
+      messagingSenderId: "64007174733",
+      appId: "1:64007174733:web:78b2a5726190bce4f6fa04",
+      measurementId: "G-91VVM4FCTR"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // 抽選池嚴格限制 1 - 196（197 - 200 僅顯示不參與抽選）
+    const MAX_DRAWABLE_SEAT = 196;
+
+    // 狀態變數
+    let currentRoomId = getRoomFromHash() || "default";
+    let drawnSeats = [];      // 過去與本輪所有已抽出的座位陣列（按抽出順序）
+    let currentWinner = null; // 本輪最新抽中的號碼
+    let isDrawing = false;
+    let unsubscribeSnapshot = null;
+
+    // 音效產生器 (Web Audio API)
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playTickSound() {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(520, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.04);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.04);
+    }
+
+    function playWinSound() {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+      notes.forEach((freq, idx) => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime + idx * 0.08);
+        gain.gain.setValueAtTime(0.12, audioCtx.currentTime + idx * 0.08);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + idx * 0.08 + 0.35);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(audioCtx.currentTime + idx * 0.08);
+        osc.stop(audioCtx.currentTime + idx * 0.08 + 0.35);
+      });
+    }
+
+    // 格式化三位數座號
+    function padSeat(num) {
+      return String(num).padStart(3, '0');
+    }
+
+    // 取得座號對應的排數資訊
+    function getSeatRowLabel(num) {
+      if (num >= 193) return "I 排";
+      const rowIdx = Math.floor((num - 1) / 24);
+      const rowChar = String.fromCharCode(65 + rowIdx);
+      const isLeft = ((num - 1) % 24) < 12;
+      return `${rowChar} 排 (${isLeft ? '左側' : '右側'})`;
+    }
+
+    // 初始化渲染座位表結構 (A - I 排)
+    function renderSeatingChart() {
+      const labelsLeft = document.getElementById('labels-left');
+      const labelsRight = document.getElementById('labels-right');
+      const seatsLeft = document.getElementById('seats-left');
+      const seatsRight = document.getElementById('seats-right');
+
+      labelsLeft.innerHTML = '';
+      labelsRight.innerHTML = '';
+      seatsLeft.innerHTML = '';
+      seatsRight.innerHTML = '';
+
+      const rows = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
+
+      rows.forEach((rowChar, rIdx) => {
+        // 排號標籤
+        const lblL = document.createElement('div');
+        lblL.className = 'flex items-center justify-center flex-1';
+        lblL.textContent = rowChar;
+        labelsLeft.appendChild(lblL);
+
+        const lblR = document.createElement('div');
+        lblR.className = 'flex items-center justify-center flex-1';
+        lblR.textContent = rowChar;
+        labelsRight.appendChild(lblR);
+
+        // 左側 12 格容器
+        const rowGridL = document.createElement('div');
+        rowGridL.className = 'seat-grid-12';
+
+        // 右側 12 格容器
+        const rowGridR = document.createElement('div');
+        rowGridR.className = 'seat-grid-12';
+
+        if (rowChar !== 'I') {
+          // A - H 排：每側 12 席
+          const startL = rIdx * 24 + 1;
+          for (let i = 0; i < 12; i++) {
+            const seatNum = startL + i;
+            rowGridL.appendChild(createSeatElement(seatNum));
+          }
+
+          const startR = rIdx * 24 + 13;
+          for (let i = 0; i < 12; i++) {
+            const seatNum = startR + i;
+            rowGridR.appendChild(createSeatElement(seatNum));
+          }
+        } else {
+          // I 排：左側 193-196 靠右對齊（緊靠中央走道左側）
+          for (let empty = 0; empty < 8; empty++) {
+            const spacer = document.createElement('div');
+            rowGridL.appendChild(spacer);
+          }
+          for (let seatNum = 193; seatNum <= 196; seatNum++) {
+            rowGridL.appendChild(createSeatElement(seatNum));
+          }
+
+          // I 排：右側 197-200 靠左對齊（緊靠中央走道右側，外觀與一般座位相同）
+          for (let seatNum = 197; seatNum <= 200; seatNum++) {
+            rowGridR.appendChild(createSeatElement(seatNum));
+          }
+          for (let empty = 0; empty < 8; empty++) {
+            const spacer = document.createElement('div');
+            rowGridR.appendChild(spacer);
+          }
+        }
+
+        seatsLeft.appendChild(rowGridL);
+        seatsRight.appendChild(rowGridR);
+      });
+    }
+
+    function createSeatElement(num) {
+      const div = document.createElement('div');
+      div.id = `seat-${num}`;
+      div.className = 'seat seat-available text-[10px] md:text-xs';
+      div.textContent = padSeat(num);
+      return div;
+    }
+
+    // 根據資料庫同步狀態更新畫面顏色與資訊
+    function updateUIState() {
+      // 1. 重設所有 1-200 座位樣式
+      for (let i = 1; i <= 200; i++) {
+        const el = document.getElementById(`seat-${i}`);
+        if (!el) continue;
+        el.className = 'seat seat-available text-[10px] md:text-xs';
+      }
+
+      // 2. 標記已抽過座位（深藍色）與本輪抽中座位（亮黃色）
+      drawnSeats.forEach((num) => {
+        const el = document.getElementById(`seat-${num}`);
+        if (!el) return;
+        if (num === currentWinner) {
+          el.className = 'seat seat-current text-[10px] md:text-xs';
+        } else {
+          el.className = 'seat seat-drawn text-[10px] md:text-xs';
+        }
+      });
+
+      // 3. 更新主顯示板
+      const winnerDisplay = document.getElementById('winner-display');
+      const winnerInfo = document.getElementById('winner-seat-info');
+      const btnDraw = document.getElementById('btn-draw');
+
+      if (currentWinner !== null) {
+        winnerDisplay.textContent = padSeat(currentWinner);
+        winnerDisplay.classList.add('text-amber-500');
+        winnerInfo.textContent = `${getSeatRowLabel(currentWinner)} ・ 恭喜抽中！`;
+      } else {
+        winnerDisplay.textContent = '---';
+        winnerDisplay.classList.remove('text-amber-500');
+        winnerInfo.textContent = drawnSeats.length > 0
+          ? '點擊按鈕繼續下一輪抽選'
+          : '準備就緒，點擊下方按鈕開始抽選';
+      }
+
+      // 檢查 1-196 是否已全數抽完
+      if (drawnSeats.length >= MAX_DRAWABLE_SEAT) {
+        btnDraw.disabled = true;
+        btnDraw.textContent = '全數號碼已抽出';
+      } else if (!isDrawing) {
+        btnDraw.disabled = false;
+        btnDraw.textContent = '開始抽選';
+      }
+
+      // 4. 更新歷史紀錄列表
+      const historyList = document.getElementById('history-list');
+      const drawnCountBadge = document.getElementById('drawn-count-badge');
+      drawnCountBadge.textContent = `已抽出 ${drawnSeats.length} 席`;
+
+      if (drawnSeats.length === 0) {
+        historyList.innerHTML = '<span class="text-slate-400">尚無抽選紀錄</span>';
+      } else {
+        historyList.innerHTML = '';
+        drawnSeats.forEach((num, idx) => {
+          const badge = document.createElement('span');
+          const isLatest = num === currentWinner;
+          badge.className = isLatest
+            ? 'px-2 py-0.5 rounded bg-amber-400 text-slate-950 font-black border border-amber-500'
+            : 'px-2 py-0.5 rounded bg-blue-600 text-white font-bold';
+          badge.textContent = `#${idx + 1}: ${padSeat(num)}`;
+          historyList.appendChild(badge);
+        });
+      }
+    }
+
+    // 連線狀態顯示更新
+    function setConnectionStatus(status, message) {
+      const dot = document.getElementById('conn-dot');
+      const text = document.getElementById('conn-text');
+      text.textContent = message;
+
+      dot.className = 'w-2.5 h-2.5 rounded-full ';
+      if (status === 'connected') {
+        dot.className += 'bg-emerald-400';
+      } else if (status === 'error') {
+        dot.className += 'bg-red-500';
+      } else {
+        dot.className += 'bg-amber-400 animate-pulse';
+      }
+    }
+
+    // 連接 Firestore 房間即時監聽
+    function connectToRoom(roomId) {
+      if (unsubscribeSnapshot) {
+        unsubscribeSnapshot();
+      }
+
+      currentRoomId = roomId;
+      document.getElementById('room-badge').textContent = `頻道: ${roomId}`;
+      setConnectionStatus('connecting', '同步連線中...');
+
+      const roomRef = doc(db, "seat_lottery_rooms", roomId);
+
+      unsubscribeSnapshot = onSnapshot(roomRef, (docSnap) => {
+        setConnectionStatus('connected', '多裝置即時同步中');
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          drawnSeats = Array.isArray(data.drawnSeats) ? data.drawnSeats : [];
+          currentWinner = data.currentWinner ?? null;
+        } else {
+          drawnSeats = [];
+          currentWinner = null;
+        }
+        if (!isDrawing) {
+          updateUIState();
+        }
+      }, (error) => {
+        console.error("Firestore 監聽錯誤:", error);
+        setConnectionStatus('error', '資料庫權限或連線異常');
+      });
+    }
+
+    // 執行抽選（含滾動視覺動畫 + Firestore 原子交易鎖定防重複）
+    async function handleDraw() {
+      if (isDrawing) return;
+
+      // 計算目前可抽號碼 (嚴格限定 1 - 196)
+      const availablePool = [];
+      for (let i = 1; i <= MAX_DRAWABLE_SEAT; i++) {
+        if (!drawnSeats.includes(i)) {
+          availablePool.push(i);
+        }
+      }
+
+      if (availablePool.length === 0) return;
+
+      isDrawing = true;
+      const btnDraw = document.getElementById('btn-draw');
+      const winnerDisplay = document.getElementById('winner-display');
+      const winnerInfo = document.getElementById('winner-seat-info');
+
+      btnDraw.disabled = true;
+      btnDraw.textContent = '抽選中...';
+      winnerInfo.textContent = '正在隨機抽選座位...';
+
+      // 先將上一輪亮黃色轉為已抽過深藍色
+      if (currentWinner !== null) {
+        const prevEl = document.getElementById(`seat-${currentWinner}`);
+        if (prevEl) prevEl.className = 'seat seat-drawn text-[10px] md:text-xs';
+      }
+
+      // 滾動動畫（約 1.4 秒）
+      let lastRolled = null;
+      const rollDuration = 1400;
+      const rollInterval = 65;
+
+      const animTimer = setInterval(() => {
+        if (lastRolled !== null) {
+          const prevRollEl = document.getElementById(`seat-${lastRolled}`);
+          if (prevRollEl) {
+            prevRollEl.className = drawnSeats.includes(lastRolled)
+              ? 'seat seat-drawn text-[10px] md:text-xs'
+              : 'seat seat-available text-[10px] md:text-xs';
+          }
+        }
+
+        const randSeat = availablePool[Math.floor(Math.random() * availablePool.length)];
+        lastRolled = randSeat;
+        winnerDisplay.textContent = padSeat(randSeat);
+
+        const rollEl = document.getElementById(`seat-${randSeat}`);
+        if (rollEl) rollEl.className = 'seat seat-rolling text-[10px] md:text-xs';
+        playTickSound();
+      }, rollInterval);
+
+      // 等待動畫結束後寫入雲端資料庫
+      setTimeout(async () => {
+        clearInterval(animTimer);
+        if (lastRolled !== null) {
+          const prevRollEl = document.getElementById(`seat-${lastRolled}`);
+          if (prevRollEl) {
+            prevRollEl.className = drawnSeats.includes(lastRolled)
+              ? 'seat seat-drawn text-[10px] md:text-xs'
+              : 'seat seat-available text-[10px] md:text-xs';
+          }
+        }
+
+        try {
+          const roomRef = doc(db, "seat_lottery_rooms", currentRoomId);
+          let finalChosen = null;
+
+          // 使用 Transaction 確保多台裝置同時按下時不會重複抽中同號
+          await runTransaction(db, async (transaction) => {
+            const snap = await transaction.get(roomRef);
+            const serverDrawn = snap.exists() && Array.isArray(snap.data().drawnSeats)
+              ? snap.data().drawnSeats
+              : [];
+
+            const latestAvailable = [];
+            for (let i = 1; i <= MAX_DRAWABLE_SEAT; i++) {
+              if (!serverDrawn.includes(i)) {
+                latestAvailable.push(i);
+              }
+            }
+
+            if (latestAvailable.length === 0) {
+              throw new Error("ALL_DRAWN");
+            }
+
+            // 使用加密級隨機數挑選
+            const randomBuffer = new Uint32Array(1);
+            window.crypto.getRandomValues(randomBuffer);
+            const pickedIndex = randomBuffer[0] % latestAvailable.length;
+            finalChosen = latestAvailable[pickedIndex];
+
+            const updatedList = [...serverDrawn, finalChosen];
+            transaction.set(roomRef, {
+              drawnSeats: updatedList,
+              currentWinner: finalChosen,
+              updatedAt: Date.now()
+            });
+          });
+
+          if (finalChosen !== null) {
+            currentWinner = finalChosen;
+            if (!drawnSeats.includes(finalChosen)) {
+              drawnSeats.push(finalChosen);
+            }
+            playWinSound();
+          }
+        } catch (err) {
+          console.error("抽選交易失敗:", err);
+          if (err.message !== "ALL_DRAWN") {
+            alert("連線寫入失敗，請確認 Firebase Firestore 資料庫與權限規則已啟用。");
+          }
+        } finally {
+          isDrawing = false;
+          updateUIState();
+        }
+      }, rollDuration);
+    }
+
+    // 執行重置
+    async function handleReset() {
+      const roomRef = doc(db, "seat_lottery_rooms", currentRoomId);
+      try {
+        await setDoc(roomRef, {
+          drawnSeats: [],
+          currentWinner: null,
+          updatedAt: Date.now()
+        });
+        drawnSeats = [];
+        currentWinner = null;
+        updateUIState();
+      } catch (err) {
+        console.error("重置失敗:", err);
+        alert("重置失敗，請確認 Firestore 資料庫與寫入規則設定。");
+      }
+    }
+
+    // Hash 路由讀取頻道代碼
+    function getRoomFromHash() {
+      const hash = window.location.hash;
+      const match = hash.match(/room=([a-zA-Z0-9_-]+)/);
+      return match ? match[1] : null;
+    }
+
+    // 綁定按鈕事件
+    document.getElementById('btn-draw').addEventListener('click', handleDraw);
+
+    const resetModal = document.getElementById('reset-modal');
+    document.getElementById('btn-open-reset').addEventListener('click', () => {
+      resetModal.classList.remove('hidden');
+      resetModal.classList.add('flex');
+    });
+    document.getElementById('btn-cancel-reset').addEventListener('click', () => {
+      resetModal.classList.add('hidden');
+      resetModal.classList.remove('flex');
+    });
+    document.getElementById('btn-confirm-reset').addEventListener('click', async () => {
+      resetModal.classList.add('hidden');
+      resetModal.classList.remove('flex');
+      await handleReset();
+    });
+
+    const roomModal = document.getElementById('room-modal');
+    const inputRoomId = document.getElementById('input-room-id');
+    document.getElementById('btn-switch-room').addEventListener('click', () => {
+      inputRoomId.value = currentRoomId;
+      roomModal.classList.remove('hidden');
+      roomModal.classList.add('flex');
+    });
+    document.getElementById('btn-cancel-room').addEventListener('click', () => {
+      roomModal.classList.add('hidden');
+      roomModal.classList.remove('flex');
+    });
+    document.getElementById('btn-confirm-room').addEventListener('click', () => {
+      const val = inputRoomId.value.trim().replace(/[^a-zA-Z0-9_-]/g, '');
+      if (val) {
+        window.location.hash = `room=${val}`;
+        connectToRoom(val);
+      }
+      roomModal.classList.add('hidden');
+      roomModal.classList.remove('flex');
+    });
+
+    // 啟動初始化
+    renderSeatingChart();
+    connectToRoom(currentRoomId);
+  </script>
+</body>
+</html>
