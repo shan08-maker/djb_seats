@@ -23,7 +23,7 @@
       border-bottom-right-radius: 50% 24px;
     }
 
-    /* 座位基本樣式 */
+    /* 座位基本樣式：取消過渡延遲讓滾動數字即時切換不卡頓 */
     .seat {
       aspect-ratio: 1 / 1;
       display: flex;
@@ -31,7 +31,7 @@
       justify-content: center;
       font-weight: 700;
       border-radius: 6px;
-      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: background-color 0.08s ease, color 0.08s ease;
       user-select: none;
       font-variant-numeric: tabular-nums;
     }
@@ -43,14 +43,12 @@
       border: 1px solid #bfdbfe;
     }
 
-    /* 滾動動畫中的高亮 */
+    /* 滾動動畫中的高亮（無 transform 放大與陰影，避免重排卡頓） */
     .seat-rolling {
-      background-color: #fef08a;
-      color: #854d0e;
+      background-color: #fde047;
+      color: #713f12;
       border: 2px solid #eab308;
-      transform: scale(1.12);
       z-index: 10;
-      box-shadow: 0 0 12px rgba(250, 204, 21, 0.8);
     }
 
     /* 本輪抽中（亮黃色） */
@@ -58,10 +56,8 @@
       background-color: #facc15;
       color: #422006;
       border: 2px solid #ca8a04;
-      transform: scale(1.12);
       z-index: 20;
-      box-shadow: 0 0 18px rgba(250, 204, 21, 0.95);
-      animation: pulse-gold 1.8s infinite;
+      box-shadow: 0 0 14px rgba(250, 204, 21, 0.9);
     }
 
     /* 過去已抽過（深藍色） */
@@ -69,15 +65,6 @@
       background-color: #2563eb;
       color: #ffffff;
       border: 1px solid #1d4ed8;
-    }
-
-    @keyframes pulse-gold {
-      0%, 100% {
-        box-shadow: 0 0 14px rgba(250, 204, 21, 0.85);
-      }
-      50% {
-        box-shadow: 0 0 24px rgba(234, 179, 8, 1);
-      }
     }
 
     /* 走道虛線 */
@@ -330,35 +317,52 @@
     let unsubscribeSnapshot = null;
 
     // 音效產生器 (Web Audio API)
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    let audioCtx = null;
+    function getAudioCtx() {
+      if (!audioCtx) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) {
+          audioCtx = new AudioContextClass();
+        }
+      }
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+      return audioCtx;
+    }
+
     function playTickSound() {
-      if (audioCtx.state === 'suspended') audioCtx.resume();
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
+      const ctx = getAudioCtx();
+      if (!ctx) return;
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
       osc.type = 'triangle';
-      osc.frequency.setValueAtTime(520, audioCtx.currentTime);
-      gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.04);
+      osc.frequency.setValueAtTime(560, now);
+      gain.gain.setValueAtTime(0.04, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.025);
       osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + 0.04);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.025);
     }
 
     function playWinSound() {
-      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const ctx = getAudioCtx();
+      if (!ctx) return;
       const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
       notes.forEach((freq, idx) => {
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
+        const startAt = ctx.currentTime + idx * 0.075;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(freq, audioCtx.currentTime + idx * 0.08);
-        gain.gain.setValueAtTime(0.12, audioCtx.currentTime + idx * 0.08);
-        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + idx * 0.08 + 0.35);
+        osc.frequency.setValueAtTime(freq, startAt);
+        gain.gain.setValueAtTime(0.11, startAt);
+        gain.gain.exponentialRampToValueAtTime(0.001, startAt + 0.32);
         osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        osc.start(audioCtx.currentTime + idx * 0.08);
-        osc.stop(audioCtx.currentTime + idx * 0.08 + 0.35);
+        gain.connect(ctx.destination);
+        osc.start(startAt);
+        osc.stop(startAt + 0.32);
       });
     }
 
@@ -570,14 +574,14 @@
       });
     }
 
-    // 執行抽選（含滾動視覺動畫 + Firestore 原子交易鎖定防重複）
+    // 執行抽選（連續流暢滾動不卡頓 + Firestore 原子交易鎖定防重複）
     async function handleDraw() {
       if (isDrawing) return;
 
-      // 計算目前可抽號碼 (嚴格限定 1 - 196)
+      const drawnSet = new Set(drawnSeats);
       const availablePool = [];
       for (let i = 1; i <= MAX_DRAWABLE_SEAT; i++) {
-        if (!drawnSeats.includes(i)) {
+        if (!drawnSet.has(i)) {
           availablePool.push(i);
         }
       }
@@ -599,95 +603,117 @@
         if (prevEl) prevEl.className = 'seat seat-drawn text-[10px] md:text-xs';
       }
 
-      // 滾動動畫（約 1.4 秒）
+      // 使用 requestAnimationFrame 依真實經過時間連續跳號
       let lastRolled = null;
+      let lastStepTime = 0;
       const rollDuration = 1400;
-      const rollInterval = 65;
+      const stepInterval = 36;
+      const startTime = performance.now();
 
-      const animTimer = setInterval(() => {
-        if (lastRolled !== null) {
-          const prevRollEl = document.getElementById(`seat-${lastRolled}`);
-          if (prevRollEl) {
-            prevRollEl.className = drawnSeats.includes(lastRolled)
-              ? 'seat seat-drawn text-[10px] md:text-xs'
-              : 'seat seat-available text-[10px] md:text-xs';
+      // 同時在背景啟動 Firestore 交易
+      const txPromise = (async () => {
+        const roomRef = doc(db, "seat_lottery_rooms", currentRoomId);
+        let finalChosen = null;
+
+        await runTransaction(db, async (transaction) => {
+          const snap = await transaction.get(roomRef);
+          const serverDrawn = snap.exists() && Array.isArray(snap.data().drawnSeats)
+            ? snap.data().drawnSeats
+            : [];
+
+          const serverDrawnSet = new Set(serverDrawn);
+          const latestAvailable = [];
+          for (let i = 1; i <= MAX_DRAWABLE_SEAT; i++) {
+            if (!serverDrawnSet.has(i)) {
+              latestAvailable.push(i);
+            }
           }
-        }
 
-        const randSeat = availablePool[Math.floor(Math.random() * availablePool.length)];
-        lastRolled = randSeat;
-        winnerDisplay.textContent = padSeat(randSeat);
-
-        const rollEl = document.getElementById(`seat-${randSeat}`);
-        if (rollEl) rollEl.className = 'seat seat-rolling text-[10px] md:text-xs';
-        playTickSound();
-      }, rollInterval);
-
-      // 等待動畫結束後寫入雲端資料庫
-      setTimeout(async () => {
-        clearInterval(animTimer);
-        if (lastRolled !== null) {
-          const prevRollEl = document.getElementById(`seat-${lastRolled}`);
-          if (prevRollEl) {
-            prevRollEl.className = drawnSeats.includes(lastRolled)
-              ? 'seat seat-drawn text-[10px] md:text-xs'
-              : 'seat seat-available text-[10px] md:text-xs';
+          if (latestAvailable.length === 0) {
+            throw new Error("ALL_DRAWN");
           }
-        }
 
-        try {
-          const roomRef = doc(db, "seat_lottery_rooms", currentRoomId);
-          let finalChosen = null;
+          const randomBuffer = new Uint32Array(1);
+          window.crypto.getRandomValues(randomBuffer);
+          const pickedIndex = randomBuffer[0] % latestAvailable.length;
+          finalChosen = latestAvailable[pickedIndex];
 
-          // 使用 Transaction 確保多台裝置同時按下時不會重複抽中同號
-          await runTransaction(db, async (transaction) => {
-            const snap = await transaction.get(roomRef);
-            const serverDrawn = snap.exists() && Array.isArray(snap.data().drawnSeats)
-              ? snap.data().drawnSeats
-              : [];
+          const updatedList = [...serverDrawn, finalChosen];
+          transaction.set(roomRef, {
+            drawnSeats: updatedList,
+            currentWinner: finalChosen,
+            updatedAt: Date.now()
+          });
+        });
 
-            const latestAvailable = [];
-            for (let i = 1; i <= MAX_DRAWABLE_SEAT; i++) {
-              if (!serverDrawn.includes(i)) {
-                latestAvailable.push(i);
+        return finalChosen;
+      })();
+
+      await new Promise((resolve) => {
+        function spin(now) {
+          const elapsed = now - startTime;
+
+          if (now - lastStepTime >= stepInterval) {
+            lastStepTime = now;
+
+            if (lastRolled !== null) {
+              const prevRollEl = document.getElementById(`seat-${lastRolled}`);
+              if (prevRollEl) {
+                prevRollEl.className = drawnSet.has(lastRolled)
+                  ? 'seat seat-drawn text-[10px] md:text-xs'
+                  : 'seat seat-available text-[10px] md:text-xs';
               }
             }
 
-            if (latestAvailable.length === 0) {
-              throw new Error("ALL_DRAWN");
+            let randSeat = availablePool[Math.floor(Math.random() * availablePool.length)];
+            if (availablePool.length > 1 && randSeat === lastRolled) {
+              randSeat = availablePool[(availablePool.indexOf(randSeat) + 1) % availablePool.length];
             }
 
-            // 使用加密級隨機數挑選
-            const randomBuffer = new Uint32Array(1);
-            window.crypto.getRandomValues(randomBuffer);
-            const pickedIndex = randomBuffer[0] % latestAvailable.length;
-            finalChosen = latestAvailable[pickedIndex];
+            lastRolled = randSeat;
+            winnerDisplay.textContent = padSeat(randSeat);
 
-            const updatedList = [...serverDrawn, finalChosen];
-            transaction.set(roomRef, {
-              drawnSeats: updatedList,
-              currentWinner: finalChosen,
-              updatedAt: Date.now()
-            });
-          });
+            const rollEl = document.getElementById(`seat-${randSeat}`);
+            if (rollEl) rollEl.className = 'seat seat-rolling text-[10px] md:text-xs';
+            playTickSound();
+          }
 
-          if (finalChosen !== null) {
-            currentWinner = finalChosen;
-            if (!drawnSeats.includes(finalChosen)) {
-              drawnSeats.push(finalChosen);
+          if (elapsed < rollDuration) {
+            requestAnimationFrame(spin);
+          } else {
+            if (lastRolled !== null) {
+              const prevRollEl = document.getElementById(`seat-${lastRolled}`);
+              if (prevRollEl) {
+                prevRollEl.className = drawnSet.has(lastRolled)
+                  ? 'seat seat-drawn text-[10px] md:text-xs'
+                  : 'seat seat-available text-[10px] md:text-xs';
+              }
             }
-            playWinSound();
+            resolve();
           }
-        } catch (err) {
-          console.error("抽選交易失敗:", err);
-          if (err.message !== "ALL_DRAWN") {
-            alert("連線寫入失敗，請確認 Firebase Firestore 資料庫與權限規則已啟用。");
-          }
-        } finally {
-          isDrawing = false;
-          updateUIState();
         }
-      }, rollDuration);
+
+        requestAnimationFrame(spin);
+      });
+
+      try {
+        const finalChosen = await txPromise;
+        if (finalChosen !== null) {
+          currentWinner = finalChosen;
+          if (!drawnSeats.includes(finalChosen)) {
+            drawnSeats.push(finalChosen);
+          }
+          playWinSound();
+        }
+      } catch (err) {
+        console.error("抽選交易失敗:", err);
+        if (err.message !== "ALL_DRAWN") {
+          alert("連線寫入失敗，請確認 Firebase Firestore 資料庫與權限規則已啟用。");
+        }
+      } finally {
+        isDrawing = false;
+        updateUIState();
+      }
     }
 
     // 執行重置
